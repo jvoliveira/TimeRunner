@@ -16,3 +16,14 @@ export interface WorkoutPlan {
   name: string;
   intervals: WorkoutInterval[];
 }
+
+export interface WorkoutSession {
+  id: string;
+  planId: string;
+  planName: string;
+  duration: number; // em segundos
+  distance: number; // em metros
+  date: number; // timestamp
+  pace: number; // segundos por km
+  path: { lat: number; lng: number }[];
+}

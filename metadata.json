@@ -1,5 +1,7 @@
 {
   "name": "TempoRunner - Treinador de Intervalos",
   "description": "Um app mobile-first de corrida intervalada que permite criar rotinas personalizadas com alertas sonoros sintetizados.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "geolocation"
+  ]
 }
