@@ -20,6 +20,8 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
+  const endAudioBufferRef = useRef<AudioBuffer | null>(null);
+
   const lastPositionRef = useRef<GeolocationPosition | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
@@ -61,9 +63,14 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
         const arrayBuffer = await response.arrayBuffer();
         const decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
         audioBufferRef.current = decodedBuffer;
+
+        const responseEnd = await fetch('/finish.mp3');
+        const arrayBufferEnd = await responseEnd.arrayBuffer();
+        endAudioBufferRef.current = await ctx.decodeAudioData(arrayBufferEnd);
+
       } catch (err) {
         console.error("Erro ao carregar ring.mp3:", err);
-      }
+      } 
     };
     loadAlertSound();
   }, []);
@@ -157,19 +164,33 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     playAlert();
   }, [playAlert]);
 
+  const playFinishAlert = useCallback(() => {
+    if (!audioContextRef.current || !endAudioBufferRef.current) return;
+
+    const ctx = audioContextRef.current;
+    if (ctx.state === 'suspended') ctx.resume();
+
+    const source = ctx.createBufferSource();
+    source.buffer = endAudioBufferRef.current;
+    source.connect(ctx.destination);
+    source.start(0);
+  }, []);
+
+  
   useEffect(() => {
     let timer: any = null;
     if (isActive && timeLeft > 0) {
       timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
     } else if (isActive && timeLeft === 0) {
       // Tocar som de alerta exatamente no 00:00
-      announceChange();
-
+      
       if (currentIndex < plan.intervals.length - 1) {
+        announceChange();
         const nextIdx = currentIndex + 1;
         setCurrentIndex(nextIdx);
         setTimeLeft(plan.intervals[nextIdx].duration);
       } else {
+        playFinishAlert();
         setIsActive(false);
         releaseWakeLock();
         saveWorkoutSession();
