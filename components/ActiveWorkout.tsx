@@ -26,14 +26,15 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
   const currentInterval = plan.intervals[currentIndex];
   const nextInterval = plan.intervals[currentIndex + 1];
 
-  // Wake Lock com tratamento de erro de política de permissão
+  // Wake Lock com tratamento de erro de política de permissão (disallowed by permissions policy)
   const requestWakeLock = async () => {
     if ('wakeLock' in navigator) {
       try {
-        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+        // @ts-ignore
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
       } catch (err) {
-        // Silencia erro se a política de permissões bloquear (comum em iframes/dev tools)
-        console.warn("Wake Lock indisponível ou bloqueado por política de segurança:", err.message);
+        // Ignora se a política do navegador bloquear (comum em iframes ou restrições de segurança)
+        console.warn("Wake Lock bloqueado pela política de permissões ou indisponível:", err);
       }
     }
   };
@@ -61,7 +62,6 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     return R * c;
   };
 
-  // Inicializa GPS
   useEffect(() => {
     if ("geolocation" in navigator) {
       watchIdRef.current = navigator.geolocation.watchPosition(
@@ -119,27 +119,29 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     }
   };
 
-  // Função robusta de áudio para Mobile
+  // Função de áudio otimizada para "despertar" o canal de mídia do celular
   const playTone = useCallback((frequency: number, type: 'single' | 'double' = 'single') => {
     try {
       if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        audioContextRef.current = new AudioCtx();
       }
       
       const ctx = audioContextRef.current;
       
-      // Essencial para Safari Mobile: Retomar o contexto se estiver suspenso
+      // Essencial: Resumir o contexto em cada execução para garantir atividade no canal de mídia
       if (ctx.state === 'suspended') {
         ctx.resume();
       }
 
-      const createSound = (startTime: number, freq: number) => {
+      const createSound = (startTime: number, freq: number, volume: number = 0.5) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
         
+        // Envelope suave para evitar "cliques" e parecer mais natural
         gain.gain.setValueAtTime(0, startTime);
-        gain.gain.linearRampToValueAtTime(0.5, startTime + 0.01);
+        gain.gain.linearRampToValueAtTime(volume, startTime + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.6);
         
         osc.frequency.setValueAtTime(freq, startTime);
@@ -153,12 +155,12 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
 
       if (type === 'double') {
         createSound(ctx.currentTime, frequency);
-        createSound(ctx.currentTime + 0.3, frequency * 1.2);
+        createSound(ctx.currentTime + 0.25, frequency * 1.25);
       } else {
         createSound(ctx.currentTime, frequency);
       }
     } catch (e) {
-      console.error("Erro ao tentar reproduzir áudio:", e);
+      console.error("Áudio falhou:", e);
     }
   }, []);
 
@@ -167,7 +169,6 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     else if (type === IntervalType.WALK) playTone(440, 'single');
   }, [playTone]);
 
-  // Timer Logic
   useEffect(() => {
     let timer: any = null;
     if (isActive && timeLeft > 0) {
@@ -190,10 +191,12 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
   }, [isActive, timeLeft, currentIndex, plan.intervals, announceChange, playTone]);
 
   const toggleTimer = () => {
-    // IMPORTANTE: Criar/Retomar AudioContext dentro do evento de clique
+    // IMPORTANTE: Criar/Retomar AudioContext estritamente no clique do usuário
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = new AudioCtx();
     }
+    
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
     }
@@ -201,8 +204,9 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     if (!isActive) {
       requestWakeLock();
       
-      // Som de feedback imediato para "desbloquear" o canal de áudio no iOS
-      playTone(660, 'single');
+      // Reproduz um tom de volume zero para "desbloquear" o hardware de áudio no modo silencioso (iOS)
+      // Isso sinaliza ao sistema que o app deseja usar o canal de mídia.
+      playTone(0, 'single'); 
 
       if (path.length === 0 && lastPositionRef.current) {
         setPath([{
@@ -211,9 +215,9 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
         }]);
       }
       
-      // Anuncia o primeiro intervalo após um mini delay para o áudio estabilizar
       if (currentIndex === 0 && timeLeft === plan.intervals[0].duration) {
-        setTimeout(() => announceChange(currentInterval.type), 200);
+        // Delay curto para garantir que o canal de áudio foi "acordado" antes do primeiro bip real
+        setTimeout(() => announceChange(currentInterval.type), 150);
       }
     } else {
       releaseWakeLock();
