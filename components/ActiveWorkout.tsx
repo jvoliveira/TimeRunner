@@ -19,6 +19,7 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
   const [showSummary, setShowSummary] = useState(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioBufferRef = useRef<AudioBuffer | null>(null);
   const lastPositionRef = useRef<GeolocationPosition | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
@@ -26,15 +27,14 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
   const currentInterval = plan.intervals[currentIndex];
   const nextInterval = plan.intervals[currentIndex + 1];
 
-  // Wake Lock com tratamento de erro de política de permissão (disallowed by permissions policy)
+  // Wake Lock com tratamento de erro robusto
   const requestWakeLock = async () => {
     if ('wakeLock' in navigator) {
       try {
         // @ts-ignore
         wakeLockRef.current = await navigator.wakeLock.request('screen');
       } catch (err) {
-        // Ignora se a política do navegador bloquear (comum em iframes ou restrições de segurança)
-        console.warn("Wake Lock bloqueado pela política de permissões ou indisponível:", err);
+        console.warn("Wake Lock bloqueado ou indisponível:", err);
       }
     }
   };
@@ -48,6 +48,25 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
       });
     }
   };
+
+  // Carrega o arquivo ring.mp3
+  useEffect(() => {
+    const loadAlertSound = async () => {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx = new AudioCtx();
+        audioContextRef.current = ctx;
+
+        const response = await fetch('/ring.mp3');
+        const arrayBuffer = await response.arrayBuffer();
+        const decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
+        audioBufferRef.current = decodedBuffer;
+      } catch (err) {
+        console.error("Erro ao carregar ring.mp3:", err);
+      }
+    };
+    loadAlertSound();
+  }, []);
 
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
     const R = 6371e3;
@@ -119,81 +138,50 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     }
   };
 
-  // Função de áudio otimizada para "despertar" o canal de mídia do celular
-  const playTone = useCallback((frequency: number, type: 'single' | 'double' = 'single') => {
-    try {
-      if (!audioContextRef.current) {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        audioContextRef.current = new AudioCtx();
-      }
-      
-      const ctx = audioContextRef.current;
-      
-      // Essencial: Resumir o contexto em cada execução para garantir atividade no canal de mídia
-      if (ctx.state === 'suspended') {
-        ctx.resume();
-      }
+  // Função para tocar o arquivo ring.mp3 carregado
+  const playAlert = useCallback(() => {
+    if (!audioContextRef.current || !audioBufferRef.current) return;
 
-      const createSound = (startTime: number, freq: number, volume: number = 0.5) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        
-        // Envelope suave para evitar "cliques" e parecer mais natural
-        gain.gain.setValueAtTime(0, startTime);
-        gain.gain.linearRampToValueAtTime(volume, startTime + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.6);
-        
-        osc.frequency.setValueAtTime(freq, startTime);
-        
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        
-        osc.start(startTime);
-        osc.stop(startTime + 0.7);
-      };
-
-      if (type === 'double') {
-        createSound(ctx.currentTime, frequency);
-        createSound(ctx.currentTime + 0.25, frequency * 1.25);
-      } else {
-        createSound(ctx.currentTime, frequency);
-      }
-    } catch (e) {
-      console.error("Áudio falhou:", e);
+    const ctx = audioContextRef.current;
+    if (ctx.state === 'suspended') {
+      ctx.resume();
     }
+
+    const source = ctx.createBufferSource();
+    source.buffer = audioBufferRef.current;
+    source.connect(ctx.destination);
+    source.start(0);
   }, []);
 
-  const announceChange = useCallback((type: IntervalType) => {
-    if (type === IntervalType.RUN) playTone(880, 'double');
-    else if (type === IntervalType.WALK) playTone(440, 'single');
-  }, [playTone]);
+  const announceChange = useCallback(() => {
+    playAlert();
+  }, [playAlert]);
 
   useEffect(() => {
     let timer: any = null;
     if (isActive && timeLeft > 0) {
       timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
     } else if (isActive && timeLeft === 0) {
+      // Tocar som de alerta exatamente no 00:00
+      announceChange();
+
       if (currentIndex < plan.intervals.length - 1) {
         const nextIdx = currentIndex + 1;
         setCurrentIndex(nextIdx);
         setTimeLeft(plan.intervals[nextIdx].duration);
-        announceChange(plan.intervals[nextIdx].type);
       } else {
         setIsActive(false);
         releaseWakeLock();
-        playTone(1200, 'double');
         saveWorkoutSession();
         setShowSummary(true);
       }
     }
     return () => clearInterval(timer);
-  }, [isActive, timeLeft, currentIndex, plan.intervals, announceChange, playTone]);
+  }, [isActive, timeLeft, currentIndex, plan.intervals, announceChange]);
 
   const toggleTimer = () => {
-    // IMPORTANTE: Criar/Retomar AudioContext estritamente no clique do usuário
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!audioContextRef.current) {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       audioContextRef.current = new AudioCtx();
     }
     
@@ -204,10 +192,6 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     if (!isActive) {
       requestWakeLock();
       
-      // Reproduz um tom de volume zero para "desbloquear" o hardware de áudio no modo silencioso (iOS)
-      // Isso sinaliza ao sistema que o app deseja usar o canal de mídia.
-      playTone(0, 'single'); 
-
       if (path.length === 0 && lastPositionRef.current) {
         setPath([{
           lat: lastPositionRef.current.coords.latitude,
@@ -215,9 +199,9 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
         }]);
       }
       
+      // Feedback sonoro inicial para "despertar" o canal de áudio
       if (currentIndex === 0 && timeLeft === plan.intervals[0].duration) {
-        // Delay curto para garantir que o canal de áudio foi "acordado" antes do primeiro bip real
-        setTimeout(() => announceChange(currentInterval.type), 150);
+        setTimeout(() => playAlert(), 100);
       }
     } else {
       releaseWakeLock();
