@@ -8,9 +8,6 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
-        allowedHosts:[
-          'timerunner.consultoriagn.vps-kinghost.net'
-        ]
       },
       plugins: [react()],
       define: {

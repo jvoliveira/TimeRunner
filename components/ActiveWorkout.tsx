@@ -20,8 +20,6 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
-  const endAudioBufferRef = useRef<AudioBuffer | null>(null);
-
   const lastPositionRef = useRef<GeolocationPosition | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
@@ -29,7 +27,7 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
   const currentInterval = plan.intervals[currentIndex];
   const nextInterval = plan.intervals[currentIndex + 1];
 
-  // Wake Lock com tratamento de erro robusto
+  // Wake Lock com tratamento de erro
   const requestWakeLock = async () => {
     if ('wakeLock' in navigator) {
       try {
@@ -51,7 +49,7 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     }
   };
 
-  // Carrega o arquivo ring.mp3
+  // Carrega o arquivo ring.mp3 do GitHub
   useEffect(() => {
     const loadAlertSound = async () => {
       try {
@@ -59,18 +57,26 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
         const ctx = new AudioCtx();
         audioContextRef.current = ctx;
 
-        const response = await fetch('/ring.mp3');
+        // Fetch do áudio hospedado no GitHub (URL raw)
+        const GITHUB_AUDIO_URL = 'https://raw.githubusercontent.com/lucas-labs/assets/main/ring.mp3';
+        const response = await fetch(GITHUB_AUDIO_URL);
+        
+        if (!response.ok) throw new Error("Falha ao buscar áudio no GitHub");
+        
         const arrayBuffer = await response.arrayBuffer();
         const decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
         audioBufferRef.current = decodedBuffer;
-
-        const responseEnd = await fetch('/finish.mp3');
-        const arrayBufferEnd = await responseEnd.arrayBuffer();
-        endAudioBufferRef.current = await ctx.decodeAudioData(arrayBufferEnd);
-
       } catch (err) {
-        console.error("Erro ao carregar ring.mp3:", err);
-      } 
+        console.error("Erro ao carregar ring.mp3 do GitHub:", err);
+        // Fallback: tentar carregar local se falhar o remoto
+        try {
+          const response = await fetch('/ring.mp3');
+          if (response.ok && audioContextRef.current) {
+             const ab = await response.arrayBuffer();
+             audioBufferRef.current = await audioContextRef.current.decodeAudioData(ab);
+          }
+        } catch(e) {}
+      }
     };
     loadAlertSound();
   }, []);
@@ -145,7 +151,6 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     }
   };
 
-  // Função para tocar o arquivo ring.mp3 carregado
   const playAlert = useCallback(() => {
     if (!audioContextRef.current || !audioBufferRef.current) return;
 
@@ -160,37 +165,19 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
     source.start(0);
   }, []);
 
-  const announceChange = useCallback(() => {
-    playAlert();
-  }, [playAlert]);
-
-  const playFinishAlert = useCallback(() => {
-    if (!audioContextRef.current || !endAudioBufferRef.current) return;
-
-    const ctx = audioContextRef.current;
-    if (ctx.state === 'suspended') ctx.resume();
-
-    const source = ctx.createBufferSource();
-    source.buffer = endAudioBufferRef.current;
-    source.connect(ctx.destination);
-    source.start(0);
-  }, []);
-
-  
   useEffect(() => {
     let timer: any = null;
     if (isActive && timeLeft > 0) {
       timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
     } else if (isActive && timeLeft === 0) {
-      // Tocar som de alerta exatamente no 00:00
-      
+      // Tocar som de alerta EXATAMENTE no 00:00
+      playAlert();
+
       if (currentIndex < plan.intervals.length - 1) {
-        announceChange();
         const nextIdx = currentIndex + 1;
         setCurrentIndex(nextIdx);
         setTimeLeft(plan.intervals[nextIdx].duration);
       } else {
-        playFinishAlert();
         setIsActive(false);
         releaseWakeLock();
         saveWorkoutSession();
@@ -198,7 +185,7 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
       }
     }
     return () => clearInterval(timer);
-  }, [isActive, timeLeft, currentIndex, plan.intervals, announceChange]);
+  }, [isActive, timeLeft, currentIndex, plan.intervals, playAlert]);
 
   const toggleTimer = () => {
     if (!audioContextRef.current) {
@@ -220,9 +207,9 @@ const ActiveWorkout: React.FC<Props> = ({ plan, onComplete }) => {
         }]);
       }
       
-      // Feedback sonoro inicial para "despertar" o canal de áudio
+      // Feedback imediato no clique para garantir canal de áudio ativo
       if (currentIndex === 0 && timeLeft === plan.intervals[0].duration) {
-        setTimeout(() => playAlert(), 100);
+        setTimeout(() => playAlert(), 50);
       }
     } else {
       releaseWakeLock();
